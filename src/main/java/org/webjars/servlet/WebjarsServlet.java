@@ -48,7 +48,7 @@ public class WebjarsServlet extends HttpServlet {
             String disableCache = config.getInitParameter("disableCache");
             if (disableCache != null) {
                 this.disableCache = Boolean.parseBoolean(disableCache);
-                logger.log(Level.INFO, "WebjarsServlet cache enabled: " + !this.disableCache);
+                logger.log(Level.INFO, "WebjarsServlet cache enabled: {0}", !this.disableCache);
             }
         } catch (Exception e) {
             logger.log(Level.WARNING, "The WebjarsServlet configuration parameter \"disableCache\" is invalid");
@@ -59,9 +59,20 @@ public class WebjarsServlet extends HttpServlet {
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
         String webjarsResourceURI = "/META-INF/resources" + request.getRequestURI().replaceFirst(request.getContextPath(), "");
-        logger.log(Level.INFO, "Webjars resource requested: " + webjarsResourceURI);
-        
-        String eTagName = this.getETagName(webjarsResourceURI);
+        logger.log(Level.FINE, "Webjars resource requested: {0}", webjarsResourceURI);
+
+        if (isDirectoryRequest(webjarsResourceURI)) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN);
+            return;
+        }
+
+        String eTagName;
+        try {
+            eTagName = this.getETagName(webjarsResourceURI);
+        } catch (IllegalArgumentException e) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
         
         if (eTagName.equals("")) {
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
@@ -80,20 +91,28 @@ public class WebjarsServlet extends HttpServlet {
         
         InputStream inputStream = this.getClass().getResourceAsStream(webjarsResourceURI);
         if (inputStream != null) {
-            if (!disableCache) {
-                prepareCacheHeaders(response, eTagName);
+            try {
+                if (!disableCache) {
+                    prepareCacheHeaders(response, eTagName);
+                }
+                String filename = getFileName(webjarsResourceURI);
+                String mimeType = this.getServletContext().getMimeType(filename);
+
+                response.setContentType(mimeType != null ? mimeType : "application/octet-stream");
+                copy(inputStream, response.getOutputStream());
+            } finally {
+                inputStream.close();
             }
-            String filename = getFileName(webjarsResourceURI);
-            String mimeType = this.getServletContext().getMimeType(filename);
-            
-            response.setContentType(mimeType != null? mimeType:"application/octet-stream");
-            copy(inputStream, response.getOutputStream());
         } else {
             // return HTTP error
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
         }
     }
-    
+
+    private static boolean isDirectoryRequest(String uri) {
+        return uri.endsWith("/");
+    }
+
     /**
      *
      * @param webjarsResourceURI
@@ -109,21 +128,16 @@ public class WebjarsServlet extends HttpServlet {
      * 
      * @param webjarsResourceURI
      * @return
+     * @throws IllegalArgumentException when insufficient URI has given
      */
-    public final String getETagName(String webjarsResourceURI) {
-        
-        String[] tokens = webjarsResourceURI.split("/");
-        
-        /* 
-         * the tokens like :
-         * [, META-INF, resources, webjars, jquery, 1.11.3, jquery.js] 
-         * [0,------ 1, ------- 2, ----- 3, ---- 4, ---- 5, ------- 6]
-         */
-        
+
+    private String getETagName(String webjarsResourceURI) {
+    	
+    	String[] tokens = webjarsResourceURI.split("/");
         if (tokens.length < 7) {
-            return "";
+            throw new IllegalArgumentException("insufficient URL has given: " + webjarsResourceURI);
         }
-        
+
         String version = tokens[5];
         String fileName = tokens[tokens.length - 1];
 
